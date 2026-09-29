@@ -3,6 +3,7 @@ package com.leaf.reader.data
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.os.Build
 import android.text.Html
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,25 @@ object ReaderContent {
                     bitmap.eraseColor(android.graphics.Color.WHITE)
                     it.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                     bitmap to renderer.pageCount
+                }
+            }
+        }
+    }
+
+    /** Conservative reflow: only text-only, single-column pages on Android 15+. */
+    suspend fun reflowablePdfText(file: File, index: Int): String? = withContext(Dispatchers.IO) {
+        if (Build.VERSION.SDK_INT < 35) return@withContext null
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+            PdfRenderer(fd).use { renderer ->
+                renderer.openPage(index.coerceIn(0, renderer.pageCount - 1)).use { page ->
+                    if (page.imageContents.isNotEmpty()) return@withContext null
+                    val blocks = page.textContents
+                    if (blocks.isEmpty()) return@withContext null
+                    val bounds = blocks.flatMap { it.bounds }
+                    val lefts = bounds.map { it.left }
+                    if (lefts.isNotEmpty() && lefts.max() - lefts.min() > page.width * 0.12f) return@withContext null
+                    val text = blocks.joinToString("\n\n") { it.text.trim() }.trim()
+                    text.takeIf { it.length >= 80 && it.count { c -> c == '\uFFFD' } < 3 }
                 }
             }
         }
