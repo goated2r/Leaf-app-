@@ -65,6 +65,7 @@ data class ReadingDay(@PrimaryKey val day: String, val lastReadAt: Long)
     @Query("SELECT * FROM Book WHERE id = :id") fun book(id: String): Flow<Book?>
     @Query("SELECT * FROM Book WHERE sha256 = :hash LIMIT 1") suspend fun byHash(hash: String): Book?
     @Insert suspend fun insert(book: Book)
+    @Delete suspend fun deleteBook(book: Book)
     @Query("UPDATE Book SET position = :position, textOffset = :offset, lastReadAt = :time WHERE id = :id") suspend fun progress(id: String, position: Int, offset: Int = 0, time: Long = System.currentTimeMillis())
     @Query("UPDATE Book SET bookmark = :position WHERE id = :id") suspend fun bookmark(id: String, position: Int)
     @Query("SELECT * FROM Note WHERE bookId = :id ORDER BY position, createdAt") fun notes(id: String): Flow<List<Note>>
