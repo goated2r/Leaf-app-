@@ -34,6 +34,17 @@ data class Collection(@PrimaryKey val id: String, val name: String)
 ], indices = [Index("collectionId")])
 data class BookCollection(val bookId: String, val collectionId: String)
 
+/** Snapshot deliberately has no foreign key: removing a download must not erase reading history. */
+@Entity
+data class ReadingHistory(
+    @PrimaryKey val id: String,
+    val title: String,
+    val author: String,
+    val type: String,
+    val lastReadAt: Long,
+    val position: Int
+)
+
 @Dao interface LeafDao {
     @Query("SELECT * FROM Book ORDER BY COALESCE(lastReadAt, addedAt) DESC") fun books(): Flow<List<Book>>
     @Query("SELECT * FROM Book WHERE id = :id") fun book(id: String): Flow<Book?>
@@ -53,9 +64,17 @@ data class BookCollection(val bookId: String, val collectionId: String)
     @Query("SELECT collectionId FROM BookCollection WHERE bookId = :bookId") fun collectionIds(bookId: String): Flow<List<String>>
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun addToCollection(link: BookCollection)
     @Query("DELETE FROM BookCollection WHERE bookId = :bookId AND collectionId = :collectionId") suspend fun removeFromCollection(bookId: String, collectionId: String)
+    @Query("SELECT * FROM ReadingHistory ORDER BY lastReadAt DESC") fun history(): Flow<List<ReadingHistory>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveHistory(history: ReadingHistory)
+    @Query("DELETE FROM ReadingHistory WHERE id = :id") suspend fun removeHistory(id: String)
+    @Transaction suspend fun recordRead(book: Book, position: Int, offset: Int = 0) {
+        val now = System.currentTimeMillis()
+        progress(book.id, position, offset, now)
+        saveHistory(ReadingHistory(book.id, book.title, book.author, book.format, now, position))
+    }
 }
 
-@Database(entities = [Book::class, Note::class, VocabularyWord::class, Collection::class, BookCollection::class], version = 4, exportSchema = true)
+@Database(entities = [Book::class, Note::class, VocabularyWord::class, Collection::class, BookCollection::class, ReadingHistory::class], version = 5, exportSchema = true)
 abstract class LeafDatabase : RoomDatabase() { abstract fun dao(): LeafDao }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -78,5 +97,11 @@ val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_Collection_name` ON `Collection` (`name`)")
         db.execSQL("CREATE TABLE IF NOT EXISTS `BookCollection` (`bookId` TEXT NOT NULL, `collectionId` TEXT NOT NULL, PRIMARY KEY(`bookId`, `collectionId`), FOREIGN KEY(`bookId`) REFERENCES `Book`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE, FOREIGN KEY(`collectionId`) REFERENCES `Collection`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)")
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_BookCollection_collectionId` ON `BookCollection` (`collectionId`)")
+    }
+}
+
+val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `ReadingHistory` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `author` TEXT NOT NULL, `type` TEXT NOT NULL, `lastReadAt` INTEGER NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
     }
 }
