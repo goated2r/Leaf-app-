@@ -1,6 +1,7 @@
 package com.leaf.reader
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             "Discover" -> DiscoverScreen(database.dao())
+                            "Articles" -> ArticlesScreen()
                             "History" -> {
                                 Text("Reading history", fontSize = 24.sp, fontFamily = FontFamily.Serif)
                                 LazyColumn { items(history) { entry ->
@@ -118,7 +120,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 } }
                             }
-                            else -> Text("$section is planned for a later milestone. Your offline library and reader are available now.", fontFamily = FontFamily.Serif, fontSize = 19.sp)
+                            else -> Unit
                         }
                     }
                 }
@@ -134,6 +136,42 @@ class MainActivity : ComponentActivity() {
         if (uri is android.net.Uri) lifecycleScope.launch {
             runCatching { repository.import(uri) }.onSuccess { selected.value = it.id }.onFailure { error.value = it.message }
         }
+    }
+}
+
+@Composable private fun ArticlesScreen() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val provider = remember { CrossrefArticleDiscovery() }
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<DiscoveredArticle>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    Column {
+        Text("Explore articles", fontFamily = FontFamily.Serif, fontSize = 25.sp)
+        Text("Research metadata from Crossref · Read at the source", color = Brass)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextField(value = query, onValueChange = { query = it }, modifier = Modifier.weight(1f), label = { Text("Explore a subject") }, singleLine = true)
+            IconButton(onClick = {
+                if (query.isNotBlank()) scope.launch {
+                    loading = true; error = null
+                    runCatching { provider.search(query) }.onSuccess { results = it }.onFailure { error = it.message ?: "Search unavailable" }
+                    loading = false
+                }
+            }) { Icon(Icons.Default.Search, "Search articles") }
+        }
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        error?.let { Text(it, color = Color(0xFFFFC5B8)) }
+        LazyColumn { items(results) { article ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF254D3D))) {
+                Column(Modifier.padding(15.dp)) {
+                    Text(article.title, fontSize = 19.sp, fontFamily = FontFamily.Serif)
+                    Text(article.authors, color = Brass, maxLines = 2)
+                    Text("${article.journal}${article.year?.let { " · $it" } ?: ""}", maxLines = 2)
+                    TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(article.sourceUrl))) }) { Text("View source and access options") }
+                }
+            }
+        } }
     }
 }
 
