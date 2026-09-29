@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
                 val id by selected
                 var section by remember { mutableStateOf("Home") }
                 var libraryQuery by remember { mutableStateOf("") }
+                var bookToRemove by remember { mutableStateOf<Book?>(null) }
                 if (id != null) {
                     val book by database.dao().book(id!!).collectAsState(initial = null)
                     book?.let { Reader(it, database.dao(), onBack = { selected.value = null }) }
@@ -97,10 +98,13 @@ class MainActivity : ComponentActivity() {
                                 val visibleBooks = books.filter { section != "Library" || libraryQuery.isBlank() || it.title.contains(libraryQuery, true) || it.author.contains(libraryQuery, true) }
                                 LazyColumn { items(visibleBooks) { book ->
                                     Card(onClick = { selected.value = book.id }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF254D3D))) {
-                                        Column(Modifier.padding(18.dp)) {
+                                        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
                                             Text(book.title, fontFamily = FontFamily.Serif, fontSize = 20.sp)
                                             Text(book.author, color = Brass)
                                             Text("${book.format.uppercase()} · ${if(book.format == "pdf") "Page" else "Chapter"} ${book.position + 1}")
+                                        }
+                                        if (section == "Library") IconButton(onClick = { bookToRemove = book }) { Icon(Icons.Default.Delete, "Remove ${book.title} download") }
                                         }
                                     }
                                 }
@@ -136,6 +140,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 error.value?.let { message -> AlertDialog(onDismissRequest = { error.value = null }, confirmButton = { TextButton(onClick = { error.value = null }) { Text("OK") } }, title = { Text("Could not import") }, text = { Text(message) }) }
+                bookToRemove?.let { book -> AlertDialog(
+                    onDismissRequest = { bookToRemove = null },
+                    title = { Text("Remove download?") },
+                    text = { Text("${book.title} and its notes will be removed from this device. Reading history stays.") },
+                    dismissButton = { TextButton(onClick = { bookToRemove = null }) { Text("Cancel") } },
+                    confirmButton = { TextButton(onClick = {
+                        bookToRemove = null
+                        lifecycleScope.launch {
+                            runCatching {
+                                database.dao().deleteBook(book)
+                                val owned = File(book.path)
+                                if (owned.canonicalFile.parentFile == File(filesDir, "books").canonicalFile) owned.delete()
+                            }.onFailure { error.value = it.message }
+                        }
+                    }) { Text("Remove download") } }
+                ) }
             }
         }
     }
