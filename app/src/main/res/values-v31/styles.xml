@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Leaf" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowSplashScreenBackground">#183C30</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/leaf_mark</item>
+        <item name="android:windowBackground">#183C30</item>
+        <item name="android:statusBarColor">#183C30</item>
+        <item name="android:navigationBarColor">#183C30</item>
+    </style>
+</resources>
