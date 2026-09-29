@@ -44,7 +44,7 @@ private val Parchment = Color(0xFFF5EEDC)
 private val Brass = Color(0xFFB89759)
 
 class MainActivity : ComponentActivity() {
-    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build() }
+    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build() }
     private val repository by lazy { ImportRepository(this, database.dao()) }
     private val error = mutableStateOf<String?>(null)
     private val selected = mutableStateOf<String?>(null)
@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme(primary = Brass, background = Forest, surface = Forest, onBackground = Parchment, onSurface = Parchment)) {
                 val books by database.dao().books().collectAsState(initial = emptyList())
                 val history by database.dao().history().collectAsState(initial = emptyList())
+                val wantBooks by database.dao().wantBooks().collectAsState(initial = emptyList())
                 val id by selected
                 var section by remember { mutableStateOf("Home") }
                 if (id != null) {
@@ -90,8 +91,19 @@ class MainActivity : ComponentActivity() {
                                             Text("${book.format.uppercase()} · ${if(book.format == "pdf") "Page" else "Chapter"} ${book.position + 1}")
                                         }
                                     }
-                                } }
+                                }
+                                    if (section == "Library") {
+                                        item { Text("Want to read", Modifier.padding(top = 20.dp), fontFamily = FontFamily.Serif, fontSize = 22.sp) }
+                                        items(wantBooks) { wanted ->
+                                            Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Column(Modifier.weight(1f)) { Text(wanted.title); Text(wanted.author, color = Brass) }
+                                                IconButton(onClick = { lifecycleScope.launch { database.dao().removeWantBook(wanted.sourceId) } }) { Icon(Icons.Default.Delete, "Remove ${wanted.title} from Want to Read") }
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                            "Discover" -> DiscoverScreen(database.dao())
                             "History" -> {
                                 Text("Reading history", fontSize = 24.sp, fontFamily = FontFamily.Serif)
                                 LazyColumn { items(history) { entry ->
@@ -122,6 +134,40 @@ class MainActivity : ComponentActivity() {
         if (uri is android.net.Uri) lifecycleScope.launch {
             runCatching { repository.import(uri) }.onSuccess { selected.value = it.id }.onFailure { error.value = it.message }
         }
+    }
+}
+
+@Composable private fun DiscoverScreen(dao: LeafDao) {
+    val scope = rememberCoroutineScope()
+    val provider = remember { OpenLibraryDiscovery() }
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<DiscoveredBook>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    Column {
+        Text("Discover books", fontFamily = FontFamily.Serif, fontSize = 25.sp)
+        Text("Search genuine book metadata from Open Library", color = Brass)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextField(value = query, onValueChange = { query = it }, modifier = Modifier.weight(1f), label = { Text("Title, author, ISBN or subject") }, singleLine = true)
+            IconButton(onClick = {
+                if (query.isNotBlank()) scope.launch {
+                    loading = true; error = null
+                    runCatching { provider.search(query) }.onSuccess { results = it }.onFailure { error = it.message ?: "Search unavailable" }
+                    loading = false
+                }
+            }) { Icon(Icons.Default.Search, "Search books") }
+        }
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        error?.let { Text(it, color = Color(0xFFFFC5B8)) }
+        LazyColumn { items(results) { result ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF254D3D))) {
+                Column(Modifier.padding(15.dp)) {
+                    Text(result.title, fontSize = 19.sp, fontFamily = FontFamily.Serif)
+                    Text("${result.author}${result.year?.let { " · $it" } ?: ""}", color = Brass)
+                    TextButton(onClick = { scope.launch { dao.saveWantBook(WantBook(result.sourceId, result.title, result.author, result.year)) } }) { Text("Add to Want to Read") }
+                }
+            }
+        } }
     }
 }
 
