@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.room.Room
 import com.leaf.reader.data.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
@@ -39,7 +42,7 @@ private val Parchment = Color(0xFFF5EEDC)
 private val Brass = Color(0xFFB89759)
 
 class MainActivity : ComponentActivity() {
-    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").build() }
+    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2).build() }
     private val repository by lazy { ImportRepository(this, database.dao()) }
     private val error = mutableStateOf<String?>(null)
     private val selected = mutableStateOf<String?>(null)
@@ -117,11 +120,12 @@ class MainActivity : ComponentActivity() {
     var addingNote by remember { mutableStateOf(false) }
     var noteText by remember { mutableStateOf("") }
     var failure by remember { mutableStateOf<String?>(null) }
+    val scroll = rememberScrollState()
     val notes by dao.notes(book.id).collectAsState(initial = emptyList())
     fun move(to: Int) {
         val next = to.coerceIn(0, (count - 1).coerceAtLeast(0))
         location = next
-        scope.launch { dao.progress(book.id, next) }
+        scope.launch { scroll.scrollTo(0); dao.progress(book.id, next, 0) }
     }
     LaunchedEffect(book.id) {
         runCatching { if(book.format == "epub") { chapters = ReaderContent.chapters(File(book.path)); count = chapters.size } }
@@ -131,30 +135,44 @@ class MainActivity : ComponentActivity() {
         if(book.format == "pdf") runCatching { ReaderContent.pdfPage(File(book.path), location) }
             .onSuccess { page = it.first; count = it.second }.onFailure { failure = it.message }
     }
-    Column(Modifier.fillMaxSize().background(Parchment)) {
-        Row(Modifier.fillMaxWidth().background(Forest).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Parchment) }
-            Text(book.title, Modifier.weight(1f), maxLines = 1, color = Parchment)
-            IconButton(onClick = { side = true }) { Icon(Icons.Default.Spa, "Reader sidebar", tint = Brass) }
+    LaunchedEffect(book.id, location, chapters.size) {
+        if (book.format == "epub" && chapters.isNotEmpty()) {
+            scroll.scrollTo(if (location == book.position) book.scrollOffset else 0)
+            snapshotFlow { scroll.value }.distinctUntilChanged().debounce(350).collect { offset ->
+                dao.progress(book.id, location, offset)
+            }
         }
+    }
+    Box(Modifier.fillMaxSize().background(Parchment)) {
         Box(Modifier.fillMaxSize().pointerInput(count, location) {
             var drag = 0f
             detectHorizontalDragGestures(onDragEnd = { if(drag < -40) move(location + 1) else if(drag > 40) move(location - 1); drag = 0f }, onHorizontalDrag = { _, delta -> drag += delta })
         }) {
             if (failure != null) Text(failure ?: "Unable to read file", Modifier.align(Alignment.Center).padding(24.dp), color = Forest)
             else if(book.format == "pdf") page?.let { bitmap -> Image(bitmap.asImageBitmap(), "PDF page ${location + 1}", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
-            else Text(chapters.getOrNull(location) ?: "Loading…", Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), color = Color(0xFF302D26), fontFamily = FontFamily.Serif, fontSize = 20.sp, lineHeight = 31.sp)
-            Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Forest), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { move(location - 1) }, enabled = location > 0) { Text("Previous") }
-                Text("${location + 1} / $count", color = Parchment)
-                TextButton(onClick = { move(location + 1) }, enabled = location + 1 < count) { Text("Next") }
+            else Text(chapters.getOrNull(location) ?: "Loading…", Modifier.fillMaxSize().verticalScroll(scroll).padding(24.dp), color = Color(0xFF302D26), fontFamily = FontFamily.Serif, fontSize = 20.sp, lineHeight = 31.sp)
+        }
+        if (book.format == "pdf") {
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxHeight().weight(1f).pointerInput(location, count) { detectTapGestures { move(location - 1) } })
+                Spacer(Modifier.weight(3f))
+                Box(Modifier.fillMaxHeight().weight(1f).pointerInput(location, count) { detectTapGestures { move(location + 1) } })
             }
+        }
+        IconButton(onClick = { side = true }, modifier = Modifier.align(Alignment.CenterEnd).background(Forest, RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp))) {
+            Icon(Icons.Default.Spa, "Open reader sidebar", tint = Brass)
         }
     }
     if (side) ModalBottomSheet(onDismissRequest = { side = false }, containerColor = Forest) {
         Column(Modifier.fillMaxWidth().padding(24.dp)) {
+            TextButton(onClick = { side = false; onBack() }) { Text("Back to library") }
             Text("Reading place", fontSize = 23.sp, fontFamily = FontFamily.Serif)
             Text("${if(book.format == "pdf") "Page" else "Chapter"} ${location + 1} of $count")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { move(location - 1); side = false }, enabled = location > 0) { Text("Previous") }
+                Text("${location + 1} / $count", color = Parchment)
+                TextButton(onClick = { move(location + 1); side = false }, enabled = location + 1 < count) { Text("Next") }
+            }
             Button(onClick = { scope.launch { dao.bookmark(book.id, location) } }) { Text("Set bookmark here") }
             book.bookmark?.let { TextButton(onClick = { move(it); side = false }) { Text("Go to bookmark: ${it + 1}") } }
             TextButton(onClick = { addingNote = true }) { Text("Add note here") }
