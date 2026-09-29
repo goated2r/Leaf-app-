@@ -45,6 +45,15 @@ data class ReadingHistory(
     val position: Int
 )
 
+@Entity
+data class WantBook(
+    @PrimaryKey val sourceId: String,
+    val title: String,
+    val author: String,
+    val firstPublished: Int?,
+    val addedAt: Long = System.currentTimeMillis()
+)
+
 @Dao interface LeafDao {
     @Query("SELECT * FROM Book ORDER BY COALESCE(lastReadAt, addedAt) DESC") fun books(): Flow<List<Book>>
     @Query("SELECT * FROM Book WHERE id = :id") fun book(id: String): Flow<Book?>
@@ -67,6 +76,9 @@ data class ReadingHistory(
     @Query("SELECT * FROM ReadingHistory ORDER BY lastReadAt DESC") fun history(): Flow<List<ReadingHistory>>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveHistory(history: ReadingHistory)
     @Query("DELETE FROM ReadingHistory WHERE id = :id") suspend fun removeHistory(id: String)
+    @Query("SELECT * FROM WantBook ORDER BY addedAt DESC") fun wantBooks(): Flow<List<WantBook>>
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun saveWantBook(book: WantBook)
+    @Query("DELETE FROM WantBook WHERE sourceId = :sourceId") suspend fun removeWantBook(sourceId: String)
     @Transaction suspend fun recordRead(book: Book, position: Int, offset: Int = 0) {
         val now = System.currentTimeMillis()
         progress(book.id, position, offset, now)
@@ -74,7 +86,7 @@ data class ReadingHistory(
     }
 }
 
-@Database(entities = [Book::class, Note::class, VocabularyWord::class, Collection::class, BookCollection::class, ReadingHistory::class], version = 5, exportSchema = true)
+@Database(entities = [Book::class, Note::class, VocabularyWord::class, Collection::class, BookCollection::class, ReadingHistory::class, WantBook::class], version = 6, exportSchema = true)
 abstract class LeafDatabase : RoomDatabase() { abstract fun dao(): LeafDao }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -103,5 +115,11 @@ val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
 val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS `ReadingHistory` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `author` TEXT NOT NULL, `type` TEXT NOT NULL, `lastReadAt` INTEGER NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+    }
+}
+
+val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `WantBook` (`sourceId` TEXT NOT NULL, `title` TEXT NOT NULL, `author` TEXT NOT NULL, `firstPublished` INTEGER, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`sourceId`))")
     }
 }
