@@ -45,7 +45,7 @@ private val Parchment = Color(0xFFF5EEDC)
 private val Brass = Color(0xFFB89759)
 
 class MainActivity : ComponentActivity() {
-    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build() }
+    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build() }
     private val repository by lazy { ImportRepository(this, database.dao()) }
     private val error = mutableStateOf<String?>(null)
     private val selected = mutableStateOf<String?>(null)
@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                 val books by database.dao().books().collectAsState(initial = emptyList())
                 val history by database.dao().history().collectAsState(initial = emptyList())
                 val wantBooks by database.dao().wantBooks().collectAsState(initial = emptyList())
+                val readingDays by database.dao().readingDays().collectAsState(initial = emptyList())
                 val id by selected
                 var section by remember { mutableStateOf("Home") }
                 var libraryQuery by remember { mutableStateOf("") }
@@ -83,6 +84,13 @@ class MainActivity : ComponentActivity() {
                         when(section) {
                             "Home", "Library" -> {
                                 Text(if(section == "Home") "Continue reading" else "Your library", fontSize = 24.sp, fontFamily = FontFamily.Serif)
+                                if (section == "Home") {
+                                    val dates = readingDays.map { it.day }.toSet()
+                                    val today = java.time.LocalDate.now()
+                                    val start = if (today.toString() in dates) today else today.minusDays(1)
+                                    val streak = generateSequence(start) { it.minusDays(1) }.takeWhile { it.toString() in dates }.count()
+                                    Text("${streak} day reading streak · ${readingDays.size} reading days", color = Brass)
+                                }
                                 Spacer(Modifier.height(12.dp))
                                 Button(onClick = { picker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }) { Text("Import EPUB or PDF") }
                                 if (section == "Library") TextField(value = libraryQuery, onValueChange = { libraryQuery = it }, label = { Text("Search your library") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
