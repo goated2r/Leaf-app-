@@ -133,6 +133,9 @@ class MainActivity : ComponentActivity() {
     var count by remember(book.id) { mutableIntStateOf(0) }
     var chapters by remember(book.id) { mutableStateOf<List<String>>(emptyList()) }
     var page by remember(book.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var pdfText by remember(book.id) { mutableStateOf<String?>(null) }
+    var pdfReflow by remember(book.id) { mutableStateOf(false) }
+    var pdfModeChosen by remember(book.id) { mutableStateOf(false) }
     var side by remember { mutableStateOf(false) }
     var addingNote by remember { mutableStateOf(false) }
     var noteText by remember { mutableStateOf("") }
@@ -156,8 +159,13 @@ class MainActivity : ComponentActivity() {
             .onFailure { failure = it.message }
     }
     LaunchedEffect(book.id, location) {
-        if(book.format == "pdf") runCatching { ReaderContent.pdfPage(File(book.path), location) }
-            .onSuccess { page = it.first; count = it.second }.onFailure { failure = it.message }
+        if(book.format == "pdf") {
+            pdfText = null
+            runCatching { ReaderContent.pdfPage(File(book.path), location) }
+                .onSuccess { page = it.first; count = it.second }.onFailure { failure = it.message }
+            pdfText = runCatching { ReaderContent.reflowablePdfText(File(book.path), location) }.getOrNull()
+            if (!pdfModeChosen) pdfReflow = pdfText != null
+        }
     }
     Box(Modifier.fillMaxSize().background(Parchment)) {
         if (failure != null) Text(failure ?: "Unable to read file", Modifier.align(Alignment.Center).padding(24.dp), color = Forest)
@@ -170,6 +178,13 @@ class MainActivity : ComponentActivity() {
                 onPreviousChapter = { move(location - 1) },
                 hasNext = location + 1 < count,
                 hasPrevious = location > 0
+            )
+        } else if (pdfReflow && pdfText != null) {
+            EpubPage(
+                text = pdfText ?: "", offset = textOffset,
+                onOffset = { next -> textOffset = next; scope.launch { dao.recordRead(book, location, next) } },
+                onNextChapter = { move(location + 1) }, onPreviousChapter = { move(location - 1) },
+                hasNext = location + 1 < count, hasPrevious = location > 0
             )
         } else {
             page?.let { bitmap -> Image(bitmap.asImageBitmap(), "PDF page ${location + 1}", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
@@ -188,6 +203,13 @@ class MainActivity : ComponentActivity() {
             TextButton(onClick = { side = false; onBack() }) { Text("Back to library") }
             Text("Reading place", fontSize = 23.sp, fontFamily = FontFamily.Serif)
             Text("${if(book.format == "pdf") "Page" else "Chapter"} ${location + 1} of $count")
+            if (book.format == "pdf") {
+                Text(if (pdfText == null) "Original layout: this page cannot be safely reflowed" else "PDF reading mode")
+                if (pdfText != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Leaf text mode")
+                    Switch(checked = pdfReflow, onCheckedChange = { pdfReflow = it; pdfModeChosen = true })
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { move(location - 1); side = false }, enabled = location > 0) { Text("Previous") }
                 Text("${location + 1} / $count", color = Parchment)
