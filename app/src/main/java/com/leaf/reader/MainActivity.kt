@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun Reader(book: Book, dao: LeafDao, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
