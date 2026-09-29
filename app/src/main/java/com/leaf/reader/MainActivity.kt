@@ -31,6 +31,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.room.Room
 import com.leaf.reader.data.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
