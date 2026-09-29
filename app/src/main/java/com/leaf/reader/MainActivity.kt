@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                 val wantBooks by database.dao().wantBooks().collectAsState(initial = emptyList())
                 val id by selected
                 var section by remember { mutableStateOf("Home") }
+                var libraryQuery by remember { mutableStateOf("") }
                 if (id != null) {
                     val book by database.dao().book(id!!).collectAsState(initial = null)
                     book?.let { Reader(it, database.dao(), onBack = { selected.value = null }) }
@@ -84,7 +85,9 @@ class MainActivity : ComponentActivity() {
                                 Text(if(section == "Home") "Continue reading" else "Your library", fontSize = 24.sp, fontFamily = FontFamily.Serif)
                                 Spacer(Modifier.height(12.dp))
                                 Button(onClick = { picker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }) { Text("Import EPUB or PDF") }
-                                LazyColumn { items(books) { book ->
+                                if (section == "Library") TextField(value = libraryQuery, onValueChange = { libraryQuery = it }, label = { Text("Search your library") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                val visibleBooks = books.filter { section != "Library" || libraryQuery.isBlank() || it.title.contains(libraryQuery, true) || it.author.contains(libraryQuery, true) }
+                                LazyColumn { items(visibleBooks) { book ->
                                     Card(onClick = { selected.value = book.id }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF254D3D))) {
                                         Column(Modifier.padding(18.dp)) {
                                             Text(book.title, fontFamily = FontFamily.Serif, fontSize = 20.sp)
@@ -226,6 +229,8 @@ class MainActivity : ComponentActivity() {
     var wordBank by remember { mutableStateOf(false) }
     var wordInput by remember { mutableStateOf("") }
     var definitionInput by remember { mutableStateOf("") }
+    var editingWordId by remember { mutableStateOf<String?>(null) }
+    var wordQuery by remember { mutableStateOf("") }
     var failure by remember { mutableStateOf<String?>(null) }
     val notes by dao.notes(book.id).collectAsState(initial = emptyList())
     val words by dao.words().collectAsState(initial = emptyList())
@@ -239,6 +244,7 @@ class MainActivity : ComponentActivity() {
         scope.launch { dao.recordRead(book, next, 0) }
     }
     LaunchedEffect(book.id) {
+        dao.recordRead(book, book.position, book.textOffset)
         runCatching { if(book.format == "epub") { chapters = ReaderContent.chapters(File(book.path)); count = chapters.size } }
             .onFailure { failure = it.message }
     }
@@ -303,7 +309,10 @@ class MainActivity : ComponentActivity() {
             book.bookmark?.let { TextButton(onClick = { move(it); side = false }) { Text("Go to bookmark: ${it + 1}") } }
             TextButton(onClick = { addingNote = true }) { Text("Add note here") }
             Text("Notes", color = Brass)
-            notes.forEach { note -> TextButton(onClick = { move(note.position); side = false }) { Text("${note.position + 1} · ${note.text}", maxLines = 2) } }
+            notes.forEach { note -> Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { move(note.position); side = false }, modifier = Modifier.weight(1f)) { Text("${note.position + 1} · ${note.text}", maxLines = 2) }
+                IconButton(onClick = { scope.launch { dao.deleteNote(note.id) } }) { Icon(Icons.Default.Delete, "Delete note") }
+            } }
             TextButton(onClick = { wordBank = true }) { Text("Word Bank") }
             Text("Collections", color = Brass)
             collections.forEach { collection ->
@@ -332,12 +341,14 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
             TextField(value = wordInput, onValueChange = { wordInput = it }, label = { Text("Word") }, singleLine = true)
             TextField(value = definitionInput, onValueChange = { definitionInput = it }, label = { Text("Definition") })
+            TextField(value = wordQuery, onValueChange = { wordQuery = it }, label = { Text("Search saved words") }, singleLine = true)
             TextButton(onClick = { val word = wordInput.trim(); val meaning = definitionInput.trim(); if (word.isNotEmpty() && meaning.isNotEmpty()) scope.launch {
-                dao.putWord(VocabularyWord(UUID.randomUUID().toString(), word, meaning)); wordInput = ""; definitionInput = ""
-            } }) { Text("Save word") }
-            words.forEach { entry ->
+                dao.putWord(VocabularyWord(editingWordId ?: UUID.randomUUID().toString(), word, meaning)); wordInput = ""; definitionInput = ""; editingWordId = null
+            } }) { Text(if (editingWordId == null) "Save word" else "Update word") }
+            words.filter { it.word.contains(wordQuery, true) || it.definition.contains(wordQuery, true) }.forEach { entry ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("${entry.word} — ${entry.definition}", modifier = Modifier.weight(1f))
+                    IconButton(onClick = { editingWordId = entry.id; wordInput = entry.word; definitionInput = entry.definition }) { Icon(Icons.Default.Edit, "Edit ${entry.word}") }
                     IconButton(onClick = { scope.launch { dao.deleteWord(entry.id) } }) { Icon(Icons.Default.Delete, "Delete ${entry.word}") }
                 }
             }
