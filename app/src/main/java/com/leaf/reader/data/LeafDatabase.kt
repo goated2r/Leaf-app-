@@ -2,6 +2,8 @@ package com.leaf.reader.data
 
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import java.time.Instant
+import java.time.ZoneId
 
 @Entity(indices = [Index(value = ["sha256"], unique = true)])
 data class Book(
@@ -54,11 +56,16 @@ data class WantBook(
     val addedAt: Long = System.currentTimeMillis()
 )
 
+/** A calendar day in the device's local time zone when a reader opened or advanced a book. */
+@Entity
+data class ReadingDay(@PrimaryKey val day: String, val lastReadAt: Long)
+
 @Dao interface LeafDao {
     @Query("SELECT * FROM Book ORDER BY COALESCE(lastReadAt, addedAt) DESC") fun books(): Flow<List<Book>>
     @Query("SELECT * FROM Book WHERE id = :id") fun book(id: String): Flow<Book?>
     @Query("SELECT * FROM Book WHERE sha256 = :hash LIMIT 1") suspend fun byHash(hash: String): Book?
     @Insert suspend fun insert(book: Book)
+    @Delete suspend fun deleteBook(book: Book)
     @Query("UPDATE Book SET position = :position, textOffset = :offset, lastReadAt = :time WHERE id = :id") suspend fun progress(id: String, position: Int, offset: Int = 0, time: Long = System.currentTimeMillis())
     @Query("UPDATE Book SET bookmark = :position WHERE id = :id") suspend fun bookmark(id: String, position: Int)
     @Query("SELECT * FROM Note WHERE bookId = :id ORDER BY position, createdAt") fun notes(id: String): Flow<List<Note>>
@@ -79,14 +86,17 @@ data class WantBook(
     @Query("SELECT * FROM WantBook ORDER BY addedAt DESC") fun wantBooks(): Flow<List<WantBook>>
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun saveWantBook(book: WantBook)
     @Query("DELETE FROM WantBook WHERE sourceId = :sourceId") suspend fun removeWantBook(sourceId: String)
+    @Query("SELECT * FROM ReadingDay ORDER BY day DESC") fun readingDays(): Flow<List<ReadingDay>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveReadingDay(day: ReadingDay)
     @Transaction suspend fun recordRead(book: Book, position: Int, offset: Int = 0) {
         val now = System.currentTimeMillis()
         progress(book.id, position, offset, now)
         saveHistory(ReadingHistory(book.id, book.title, book.author, book.format, now, position))
+        saveReadingDay(ReadingDay(Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate().toString(), now))
     }
 }
 
-@Database(entities = [Book::class, Note::class, VocabularyWord::class, Collection::class, BookCollection::class, ReadingHistory::class, WantBook::class], version = 6, exportSchema = true)
+@Database(entities = [Book::class, Note::class, VocabularyWord::class, Collection::class, BookCollection::class, ReadingHistory::class, WantBook::class, ReadingDay::class], version = 7, exportSchema = true)
 abstract class LeafDatabase : RoomDatabase() { abstract fun dao(): LeafDao }
 
 val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
@@ -121,5 +131,11 @@ val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
 val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS `WantBook` (`sourceId` TEXT NOT NULL, `title` TEXT NOT NULL, `author` TEXT NOT NULL, `firstPublished` INTEGER, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`sourceId`))")
+    }
+}
+
+val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `ReadingDay` (`day` TEXT NOT NULL, `lastReadAt` INTEGER NOT NULL, PRIMARY KEY(`day`))")
     }
 }

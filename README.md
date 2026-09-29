@@ -31,3 +31,7 @@ No API keys are required for this first milestone. No paid SDK is required to bu
 `data/LeafDatabase.kt`: Room entities/DAO; `data/ImportRepository.kt`: Storage Access Framework import and private file ownership; `data/ReaderContent.kt`: EPUB spine parsing and PDF rendering; `MainActivity.kt`: Compose screens. This narrow structure is intentional for a first vertical slice; split UI into screen ViewModels and add repositories as the features mature. Versioned Room migrations are mandatory before altering a schema with user data.
 
 Next: implement EPUB CFI or equivalent fine-grained location and pagination, then an immersive reader/sidebar, robust EPUB media and navigation, persistence tests, PDF text extraction/reflow with an honest fallback, and the remaining phases in the supplied brief. Backups should use a user-recoverable key strategy; a key held only in Android Keystore may be lost on uninstall, making a cloud backup impossible to restore.
+
+## Current development state
+
+The Android project now contains an initial paginated EPUB text reader, original-layout PDF viewer with a conservative Android 15 text reflow path, offline notes/bookmarks/Word Bank/collections/history, and Open Library metadata search with Want to Read. The full brief remains in progress. Generated builds are development artifacts and are not a complete release.
