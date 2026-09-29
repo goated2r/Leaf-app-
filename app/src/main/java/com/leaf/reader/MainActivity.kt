@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,9 +33,9 @@ import androidx.room.Room
 import com.leaf.reader.data.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -43,7 +44,7 @@ private val Parchment = Color(0xFFF5EEDC)
 private val Brass = Color(0xFFB89759)
 
 class MainActivity : ComponentActivity() {
-    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2).build() }
+    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build() }
     private val repository by lazy { ImportRepository(this, database.dao()) }
     private val error = mutableStateOf<String?>(null)
     private val selected = mutableStateOf<String?>(null)
@@ -112,8 +113,8 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun Reader(book: Book, dao: LeafDao, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     var location by remember(book.id) { mutableIntStateOf(book.position) }
+    var textOffset by remember(book.id) { mutableIntStateOf(book.textOffset) }
     var count by remember(book.id) { mutableIntStateOf(0) }
     var chapters by remember(book.id) { mutableStateOf<List<String>>(emptyList()) }
     var page by remember(book.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
@@ -121,12 +122,12 @@ class MainActivity : ComponentActivity() {
     var addingNote by remember { mutableStateOf(false) }
     var noteText by remember { mutableStateOf("") }
     var failure by remember { mutableStateOf<String?>(null) }
-    val scroll = rememberScrollState()
     val notes by dao.notes(book.id).collectAsState(initial = emptyList())
     fun move(to: Int) {
         val next = to.coerceIn(0, (count - 1).coerceAtLeast(0))
         location = next
-        scope.launch { scroll.scrollTo(0); dao.progress(book.id, next, 0) }
+        textOffset = 0
+        scope.launch { dao.progress(book.id, next, 0) }
     }
     LaunchedEffect(book.id) {
         runCatching { if(book.format == "epub") { chapters = ReaderContent.chapters(File(book.path)); count = chapters.size } }
@@ -136,24 +137,20 @@ class MainActivity : ComponentActivity() {
         if(book.format == "pdf") runCatching { ReaderContent.pdfPage(File(book.path), location) }
             .onSuccess { page = it.first; count = it.second }.onFailure { failure = it.message }
     }
-    LaunchedEffect(book.id, location, chapters.size) {
-        if (book.format == "epub" && chapters.isNotEmpty()) {
-            scroll.scrollTo(if (location == book.position) book.scrollOffset else 0)
-            snapshotFlow { scroll.value }.distinctUntilChanged().debounce(350).collect { offset ->
-                dao.progress(book.id, location, offset)
-            }
-        }
-    }
     Box(Modifier.fillMaxSize().background(Parchment)) {
-        Box(Modifier.fillMaxSize().pointerInput(count, location) {
-            var drag = 0f
-            detectHorizontalDragGestures(onDragEnd = { if(drag < -40) move(location + 1) else if(drag > 40) move(location - 1); drag = 0f }, onHorizontalDrag = { _, delta -> drag += delta })
-        }) {
-            if (failure != null) Text(failure ?: "Unable to read file", Modifier.align(Alignment.Center).padding(24.dp), color = Forest)
-            else if(book.format == "pdf") page?.let { bitmap -> Image(bitmap.asImageBitmap(), "PDF page ${location + 1}", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
-            else Text(chapters.getOrNull(location) ?: "Loading…", Modifier.fillMaxSize().verticalScroll(scroll).padding(24.dp), color = Color(0xFF302D26), fontFamily = FontFamily.Serif, fontSize = 20.sp, lineHeight = 31.sp)
-        }
-        if (book.format == "pdf") {
+        if (failure != null) Text(failure ?: "Unable to read file", Modifier.align(Alignment.Center).padding(24.dp), color = Forest)
+        else if (book.format == "epub") {
+            EpubPage(
+                text = chapters.getOrNull(location) ?: "",
+                offset = textOffset,
+                onOffset = { next -> textOffset = next; scope.launch { dao.progress(book.id, location, next) } },
+                onNextChapter = { move(location + 1) },
+                onPreviousChapter = { move(location - 1) },
+                hasNext = location + 1 < count,
+                hasPrevious = location > 0
+            )
+        } else {
+            page?.let { bitmap -> Image(bitmap.asImageBitmap(), "PDF page ${location + 1}", Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxHeight().weight(1f).pointerInput(location, count) { detectTapGestures { move(location - 1) } })
                 Spacer(Modifier.weight(3f))
@@ -185,4 +182,55 @@ class MainActivity : ComponentActivity() {
     if (addingNote) AlertDialog(onDismissRequest = { addingNote = false }, title = { Text("Note at ${location + 1}") }, text = { TextField(value = noteText, onValueChange = { noteText = it }, label = { Text("Your note") }) }, confirmButton = {
         TextButton(onClick = { if(noteText.isNotBlank()) scope.launch { dao.addNote(Note(UUID.randomUUID().toString(), book.id, location, noteText.trim())); noteText = ""; addingNote = false } }) { Text("Save") }
     })
+}
+
+@Composable private fun EpubPage(
+    text: String,
+    offset: Int,
+    onOffset: (Int) -> Unit,
+    onNextChapter: () -> Unit,
+    onPreviousChapter: () -> Unit,
+    hasNext: Boolean,
+    hasPrevious: Boolean
+) {
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 30.dp)) {
+        val width = with(density) { maxWidth.toPx() }.toInt()
+        val height = with(density) { maxHeight.toPx() }.toInt()
+        val fontPx = with(density) { 20.sp.toPx() }
+        val pages by produceState<List<PageSlice>>(initialValue = emptyList(), text, width, height, fontPx) {
+            value = withContext(Dispatchers.Default) { EpubPagination.paginate(text, width, height, fontPx) }
+        }
+        val index = EpubPagination.pageForOffset(pages, offset)
+        fun turn(direction: Int) {
+            val next = index + direction
+            when {
+                next in pages.indices -> onOffset(pages[next].start)
+                direction > 0 && hasNext -> onNextChapter()
+                direction < 0 && hasPrevious -> onPreviousChapter()
+            }
+        }
+        var drag by remember { mutableFloatStateOf(0f) }
+        Box(Modifier.fillMaxSize()
+            .pointerInput(index, pages, hasNext, hasPrevious) {
+                detectHorizontalDragGestures(
+                    onDragEnd = { if (drag < -45f) turn(1) else if (drag > 45f) turn(-1); drag = 0f },
+                    onHorizontalDrag = { _, delta -> drag += delta }
+                )
+            }
+            .pointerInput(index, pages, hasNext, hasPrevious) {
+                detectTapGestures { position ->
+                    if (position.x < size.width * 0.25f) turn(-1)
+                    else if (position.x > size.width * 0.75f) turn(1)
+                }
+            }
+        ) {
+            val slice = pages.getOrNull(index)
+            Text(
+                if (slice == null) "Loading…" else text.substring(slice.start, slice.end),
+                modifier = Modifier.fillMaxSize(), color = Color(0xFF302D26),
+                fontFamily = FontFamily.Serif, fontSize = 20.sp, lineHeight = 29.sp
+            )
+        }
+    }
 }
