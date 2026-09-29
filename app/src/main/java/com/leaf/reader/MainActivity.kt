@@ -44,7 +44,7 @@ private val Parchment = Color(0xFFF5EEDC)
 private val Brass = Color(0xFFB89759)
 
 class MainActivity : ComponentActivity() {
-    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build() }
+    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build() }
     private val repository by lazy { ImportRepository(this, database.dao()) }
     private val error = mutableStateOf<String?>(null)
     private val selected = mutableStateOf<String?>(null)
@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Brass, background = Forest, surface = Forest, onBackground = Parchment, onSurface = Parchment)) {
                 val books by database.dao().books().collectAsState(initial = emptyList())
+                val history by database.dao().history().collectAsState(initial = emptyList())
                 val id by selected
                 var section by remember { mutableStateOf("Home") }
                 if (id != null) {
@@ -87,6 +88,20 @@ class MainActivity : ComponentActivity() {
                                             Text(book.title, fontFamily = FontFamily.Serif, fontSize = 20.sp)
                                             Text(book.author, color = Brass)
                                             Text("${book.format.uppercase()} · ${if(book.format == "pdf") "Page" else "Chapter"} ${book.position + 1}")
+                                        }
+                                    }
+                                } }
+                            }
+                            "History" -> {
+                                Text("Reading history", fontSize = 24.sp, fontFamily = FontFamily.Serif)
+                                LazyColumn { items(history) { entry ->
+                                    Card(Modifier.fillMaxWidth().padding(vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF254D3D))) {
+                                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(entry.title, fontFamily = FontFamily.Serif, fontSize = 19.sp)
+                                                Text("${entry.author} · ${entry.type.uppercase()} · ${java.text.DateFormat.getDateInstance().format(java.util.Date(entry.lastReadAt))}", color = Brass)
+                                            }
+                                            IconButton(onClick = { lifecycleScope.launch { database.dao().removeHistory(entry.id) } }) { Icon(Icons.Default.Delete, "Remove ${entry.title} from history") }
                                         }
                                     }
                                 } }
@@ -134,7 +149,7 @@ class MainActivity : ComponentActivity() {
         val next = to.coerceIn(0, (count - 1).coerceAtLeast(0))
         location = next
         textOffset = 0
-        scope.launch { dao.progress(book.id, next, 0) }
+        scope.launch { dao.recordRead(book, next, 0) }
     }
     LaunchedEffect(book.id) {
         runCatching { if(book.format == "epub") { chapters = ReaderContent.chapters(File(book.path)); count = chapters.size } }
@@ -150,7 +165,7 @@ class MainActivity : ComponentActivity() {
             EpubPage(
                 text = chapters.getOrNull(location) ?: "",
                 offset = textOffset,
-                onOffset = { next -> textOffset = next; scope.launch { dao.progress(book.id, location, next) } },
+                onOffset = { next -> textOffset = next; scope.launch { dao.recordRead(book, location, next) } },
                 onNextChapter = { move(location + 1) },
                 onPreviousChapter = { move(location - 1) },
                 hasNext = location + 1 < count,
