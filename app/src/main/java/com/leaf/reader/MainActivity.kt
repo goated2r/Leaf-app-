@@ -44,7 +44,7 @@ private val Parchment = Color(0xFFF5EEDC)
 private val Brass = Color(0xFFB89759)
 
 class MainActivity : ComponentActivity() {
-    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build() }
+    private val database by lazy { Room.databaseBuilder(applicationContext, LeafDatabase::class.java, "leaf.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build() }
     private val repository by lazy { ImportRepository(this, database.dao()) }
     private val error = mutableStateOf<String?>(null)
     private val selected = mutableStateOf<String?>(null)
@@ -121,8 +121,15 @@ class MainActivity : ComponentActivity() {
     var side by remember { mutableStateOf(false) }
     var addingNote by remember { mutableStateOf(false) }
     var noteText by remember { mutableStateOf("") }
+    var wordBank by remember { mutableStateOf(false) }
+    var wordInput by remember { mutableStateOf("") }
+    var definitionInput by remember { mutableStateOf("") }
     var failure by remember { mutableStateOf<String?>(null) }
     val notes by dao.notes(book.id).collectAsState(initial = emptyList())
+    val words by dao.words().collectAsState(initial = emptyList())
+    val collections by dao.collections().collectAsState(initial = emptyList())
+    val collectionIds by dao.collectionIds(book.id).collectAsState(initial = emptyList())
+    var newCollection by remember { mutableStateOf("") }
     fun move(to: Int) {
         val next = to.coerceIn(0, (count - 1).coerceAtLeast(0))
         location = next
@@ -176,12 +183,45 @@ class MainActivity : ComponentActivity() {
             TextButton(onClick = { addingNote = true }) { Text("Add note here") }
             Text("Notes", color = Brass)
             notes.forEach { note -> TextButton(onClick = { move(note.position); side = false }) { Text("${note.position + 1} · ${note.text}", maxLines = 2) } }
+            TextButton(onClick = { wordBank = true }) { Text("Word Bank") }
+            Text("Collections", color = Brass)
+            collections.forEach { collection ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = collection.id in collectionIds, onCheckedChange = { checked -> scope.launch {
+                        if (checked) dao.addToCollection(BookCollection(book.id, collection.id))
+                        else dao.removeFromCollection(book.id, collection.id)
+                    } })
+                    Text(collection.name)
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextField(value = newCollection, onValueChange = { newCollection = it }, label = { Text("New collection") }, modifier = Modifier.weight(1f), singleLine = true)
+                TextButton(onClick = { val name = newCollection.trim(); if (name.isNotEmpty()) scope.launch {
+                    runCatching { dao.addCollection(Collection(UUID.randomUUID().toString(), name)) }
+                    newCollection = ""
+                } }) { Text("Add") }
+            }
             Spacer(Modifier.height(30.dp))
         }
     }
     if (addingNote) AlertDialog(onDismissRequest = { addingNote = false }, title = { Text("Note at ${location + 1}") }, text = { TextField(value = noteText, onValueChange = { noteText = it }, label = { Text("Your note") }) }, confirmButton = {
         TextButton(onClick = { if(noteText.isNotBlank()) scope.launch { dao.addNote(Note(UUID.randomUUID().toString(), book.id, location, noteText.trim())); noteText = ""; addingNote = false } }) { Text("Save") }
     })
+    if (wordBank) AlertDialog(onDismissRequest = { wordBank = false }, title = { Text("Word Bank") }, text = {
+        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+            TextField(value = wordInput, onValueChange = { wordInput = it }, label = { Text("Word") }, singleLine = true)
+            TextField(value = definitionInput, onValueChange = { definitionInput = it }, label = { Text("Definition") })
+            TextButton(onClick = { val word = wordInput.trim(); val meaning = definitionInput.trim(); if (word.isNotEmpty() && meaning.isNotEmpty()) scope.launch {
+                dao.putWord(VocabularyWord(UUID.randomUUID().toString(), word, meaning)); wordInput = ""; definitionInput = ""
+            } }) { Text("Save word") }
+            words.forEach { entry ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${entry.word} — ${entry.definition}", modifier = Modifier.weight(1f))
+                    IconButton(onClick = { scope.launch { dao.deleteWord(entry.id) } }) { Icon(Icons.Default.Delete, "Delete ${entry.word}") }
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { wordBank = false }) { Text("Done") } })
 }
 
 @Composable private fun EpubPage(
